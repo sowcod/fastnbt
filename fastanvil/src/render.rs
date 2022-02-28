@@ -28,12 +28,6 @@ impl<'a, P: Palette> TopShadeRenderer<'a, P> {
     pub fn render<C: Chunk>(&self, chunk: &C, north: Option<&C>) -> [Rgba; 16 * 16] {
         let mut data = [[0, 0, 0, 0]; 16 * 16];
 
-        if chunk.status() != "full" && chunk.status() != "spawn" {
-            // Chunks that have been fully generated will have a 'full' status.
-            // Skip chunks that don't; the way they render is unpredictable.
-            return data;
-        }
-
         let y_range = chunk.y_range();
 
         for z in 0..16 {

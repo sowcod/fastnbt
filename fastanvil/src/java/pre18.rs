@@ -52,7 +52,7 @@ impl Chunk for JavaChunk {
             _ => {
                 // Assume latest
                 let range = self.y_range();
-                let y_shifted = (y.clamp(range.start, range.end - 1) - range.start) as usize;
+                let y_shifted = (y.clamp(range.start, 0.max(range.end - 1)) - range.start) as usize;
                 let i = (z / 4) * 4 + (x / 4) + (y_shifted / 4) * 16;
 
                 let biome = *biomes.get(i)?;
