@@ -171,13 +171,17 @@ impl Renderer {
             )
         })?;
 
-        let face = el.faces.get("up").ok_or_else(|| {
-            Error::MissingElements(
-                id.to_owned(),
-                encoded_props.to_owned(),
-                model_name.to_owned(),
-            )
-        })?;
+        let face = if let Some(up) = el.faces.get("up") {
+            up
+        } else {
+            el.faces.get("north").ok_or_else(|| {
+                Error::MissingElements(
+                    id.to_owned(),
+                    encoded_props.to_owned(),
+                    model_name.to_owned(),
+                )
+            })?
+        };
 
         let tex = &face.texture;
 
