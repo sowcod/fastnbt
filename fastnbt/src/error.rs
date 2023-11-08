@@ -2,7 +2,7 @@
 use std::fmt::Display;
 
 /// Various errors that can occur during deserialization.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(String);
 
 /// Convenience type for Result.
@@ -22,6 +22,16 @@ impl serde::de::Error for Error {
     }
 }
 
+// TODO: Separate error types for ser and de?
+impl serde::ser::Error for Error {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        Error(msg.to_string())
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error(format!("io error: {}", e))
@@ -31,10 +41,6 @@ impl From<std::io::Error> for Error {
 impl Error {
     pub(crate) fn invalid_tag(tag: u8) -> Error {
         Error(format!("invalid nbt tag value: {}", tag))
-    }
-
-    pub(crate) fn invalid_size(size: i32) -> Error {
-        Error(format!("invalid nbt list/array size: {}", size))
     }
 
     pub(crate) fn no_root_compound() -> Error {
@@ -50,6 +56,14 @@ impl Error {
 
     pub(crate) fn unexpected_eof() -> Error {
         Error("eof: unexpectedly ran out of input".to_owned())
+    }
+
+    pub(crate) fn array_as_seq() -> Error {
+        Error("expected NBT Array, found seq: use ByteArray, IntArray or LongArray types".into())
+    }
+
+    pub(crate) fn array_as_other() -> Error {
+        Error("expected NBT Array: use ByteArray, IntArray or LongArray types".into())
     }
 
     pub(crate) fn bespoke(msg: String) -> Error {

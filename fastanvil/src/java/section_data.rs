@@ -48,7 +48,7 @@ impl<T: Debug> BlockData<T> {
     pub fn try_iter_indices(&self) -> Option<StatesIter> {
         if let Some(data) = &self.inner.data {
             let bits = blockstates_bits_per_block(self.inner.palette.len());
-            Some(StatesIter::new(bits, 16 * 16 * 16, data.as_slice()))
+            Some(StatesIter::new(bits, 16 * 16 * 16, data))
         } else {
             None
         }
@@ -77,7 +77,7 @@ impl<T: Debug> BiomeData<T> {
     pub fn try_iter_indices(&self) -> Option<StatesIter> {
         if let Some(data) = &self.inner.data {
             let bits = biomes_bits_per_block(self.inner.palette.len());
-            Some(StatesIter::new(bits, 4 * 4 * 4, data.as_slice()))
+            Some(StatesIter::new(bits, 4 * 4 * 4, data))
         } else {
             None
         }
@@ -150,12 +150,18 @@ impl<T: Debug> Default for BiomeData<T> {
 
 /// Number of bits that will be used per block in block_states data for blocks.
 fn blockstates_bits_per_block(palette_len: usize) -> usize {
-    std::cmp::max((palette_len as f64).log2().ceil() as usize, 4)
+    std::cmp::max(4, min_bits_for_n_states(palette_len))
+    // std::cmp::max((palette_len as f64).log2().ceil() as usize, 4)
 }
 
 /// Number of bits that will be used per block in block_states data for biomes.
 fn biomes_bits_per_block(palette_len: usize) -> usize {
-    std::cmp::max((palette_len as f64).log2().ceil() as usize, 1)
+    std::cmp::max(1, min_bits_for_n_states(palette_len))
+    // std::cmp::max((palette_len as f64).log2().ceil() as usize, 1)
+}
+
+pub(crate) fn min_bits_for_n_states(palette_len: usize) -> usize {
+    (usize::BITS - (palette_len - 1).leading_zeros()) as usize
 }
 
 /// Iterator over block state data. Each value is the index into the relevant palette.
@@ -189,7 +195,7 @@ impl<'a> Iterator for StatesIter<'a> {
         let start = self.pos;
         self.pos += self.stride;
         let end = self.pos;
-        let datum = *(self.inner.get(0)?) as u64;
+        let datum = *(self.inner.first()?) as u64;
 
         let value = datum.get_bits(start..end) as usize;
         self.remaining -= 1;

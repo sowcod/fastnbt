@@ -7,7 +7,7 @@ use std::{
 
 use clap::{App, Arg};
 use env_logger::Env;
-use fastanvil::RegionBuffer;
+use fastanvil::Region;
 use fastnbt::Value;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -44,45 +44,62 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("no output format specified");
     let out_dir = matches.value_of("out-dir");
 
-    let mut region = RegionBuffer::new(file);
+    let mut region = Region::from_stream(file).unwrap();
 
     if let Some(dir) = out_dir {
         create_dir(dir).unwrap_or_default();
     }
 
-    region
-        .for_each_chunk(|x, z, data| {
-            let mut out: Box<dyn Write> = if let Some(dir) = out_dir {
-                let ext = match output_format {
-                    "nbt" => "nbt",
-                    "json" | "json-pretty" => "json",
-                    _ => "txt",
-                };
-                Box::new(File::create(format!("{}/{}.{}.{}", dir, x, z, ext)).unwrap())
-            } else {
-                Box::new(io::stdout())
-            };
+    for z in 0..32 {
+        for x in 0..32 {
+            match region.read_chunk(x, z) {
+                Ok(Some(data)) => {
+                    if !should_output_chunk(&data) {
+                        continue;
+                    }
 
-            let chunk: Value = fastnbt::de::from_bytes(data).unwrap();
+                    let mut out: Box<dyn Write> = if let Some(dir) = out_dir {
+                        let ext = match output_format {
+                            "nbt" => "nbt",
+                            "json" | "json-pretty" => "json",
+                            _ => "txt",
+                        };
+                        Box::new(File::create(format!("{}/{}.{}.{}", dir, x, z, ext)).unwrap())
+                    } else {
+                        Box::new(io::stdout())
+                    };
 
-            match output_format {
-                "rust" => {
-                    write!(&mut out, "{:?}", chunk).unwrap();
+                    let chunk: Value = fastnbt::from_bytes(&data).unwrap();
+
+                    match output_format {
+                        "rust" => {
+                            write!(&mut out, "{:?}", chunk).unwrap();
+                        }
+                        "rust-pretty" => {
+                            write!(&mut out, "{:#?}", chunk).unwrap();
+                        }
+                        "nbt" => {
+                            out.write_all(&data).unwrap();
+                        }
+                        "json" => {
+                            serde_json::ser::to_writer(out, &chunk).unwrap();
+                        }
+                        "json-pretty" => {
+                            serde_json::ser::to_writer_pretty(out, &chunk).unwrap();
+                        }
+                        _ => panic!("unknown output format '{}'", output_format),
+                    }
                 }
-                "rust-pretty" => {
-                    write!(&mut out, "{:#?}", chunk).unwrap();
-                }
-                "nbt" => {
-                    out.write_all(data).unwrap();
-                }
-                "json" => {
-                    serde_json::ser::to_writer(out, &chunk).unwrap();
-                }
-                "json-pretty" => {
-                    serde_json::ser::to_writer_pretty(out, &chunk).unwrap();
-                }
-                _ => panic!("unknown output format '{}'", output_format),
+                Ok(None) => {}
+                Err(e) => return Err(e.into()),
             }
-        })
-        .map_err(|e| e.into())
+        }
+    }
+    Ok(())
+}
+
+fn should_output_chunk(_data: &[u8]) -> bool {
+    // If you're trying to locate a misbehaving chunk, you can filter out chunks here.
+    // let chunk = JavaChunk::from_bytes(data).unwrap();
+    true
 }

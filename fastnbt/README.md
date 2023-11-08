@@ -2,56 +2,56 @@
 
 Documentation: [docs.rs](https://docs.rs/crate/fastnbt)
 
-Fast deserializer and parser for *Minecraft: Java Edition*'s NBT format.
+Fast serde deserializer and serializer for *Minecraft: Java Edition*'s NBT format.
 
-Includes
+Zero-copy is supported where possible through `from_bytes`. The
+`borrow` module contains more types for avoiding allocations.
 
-* a serde based deserializer for NBT for deserialization.
-* a lower level parser using the `Read` trait.
+Includes a `Value` type for serializing or deserializing any NBT. `Value`
+correctly preserves the exact NBT structure. The `nbt!` macro allows easy
+creation of these values.
 
-The derserializer allows you to avoid allocations where possible. Strings can be
-deserialized to `&'a str` where `'a` is the lifetime of the data being
-deserialized. The `borrow` module contains more types for avoiding allocations.
+To support NBT's arrays, there are dedicated `ByteArray`, `IntArray` and
+`LongArray` types.
 
 [See the documentation](https://docs.rs/crate/fastnbt) for more information.
 
 ```toml
 [dependencies]
-fastnbt = "1"
+fastnbt = "2"
 ```
 
-`fastnbt` follows Semver, so any version 1 code you write should remain valid.
-Some things that this project does *not* count as a breaking change are:
+`fastnbt` follows Semver, some things that this project does *not* count as a
+breaking change are:
 
 * Minimum Rust version change. Outside of corporate environments this should not
   be too difficult, and I don't see much need for NBT in those environments.
-* Improving the deserializer such that valid NBT that did not deserialize, then
-  deserializes. Any of these cases I consider a bug.
-* Data format when serializing types from fastnbt. Types in fastnbt implement
-  `serde::Serialise` to enable spitting out to other data formats, but may
-  change structure in future.
+* Improving the (de)serializer such that valid NBT that did not (de)serialize, then
+  (de)serializes. Any of these cases I consider a bug.
+* Data format when serializing types from fastnbt/fastanvil to other formats.
+  Types in fastnbt implement `serde::Serialize` to enable spitting out to other
+  data formats, but may change structure in future.
 
 Changes that make `fastnbt` incompatible with WebAssembly *are* considered
 breaking changes.
 
-# Comparison to other NBT crates
+# Other NBT crates
 
-There are other crates for NBT out there, this tries to give an honest
-comparison to them. The Hemtite `nbt` crate was the only other crate I found with serde deserialization.
+There appears to be a few crates that support serde (de)serialization, the main
+ones I found were:
 
-| Feature | `fastnbt` | Hematite `nbt` | note |
-| ------- | --------- | -------------- | ---- |
-| Benchmark world render time (relative)\* | 1.00 | 1.37 | fastnbt is ~37% faster. See note. |
-| Deserialization | yes | yes | |
-| Serialization | no | yes | |
-| `Value`-like type | yes | yes | `fastnbt` is careful to preserve exact types. |
-| Long Array (MC 1.12+) | yes | yes | | 
-| Minecraft specialized unicode | yes | yes | |
-| Deserialize from reader | no | yes | |
-| WASM compatible | yes | unknown | | 
+* [`hematite_nbt`](https://github.com/PistonDevelopers/hematite_nbt)
+* [`quartz_nbt`](https://github.com/Rusty-Quartz/quartz_nbt)
 
+There are likely others! There are definitely more without serde support.
 
-\* This is rendering the overworld of Etho's Lets Play Episode 550. Exact relative
-figures are 1000±13 for fastnbt and 1370±7 for hematite-nbt. This used the
-`anvil tiles` executable, swapping out the deserializer only, so performance
-tweaks in rendering chunks are not counted.
+* All these crates support serialization and deserialization with
+  serde.
+* They are not interoperable with each other due to requiring custom handling of
+  NBT Array types.
+* They all handle Minecraft's (actually Java's) specialized Unicode.
+* quartz and fastnbt support borrowing from the underlying bytes being deserialized.
+* fastnbt's `Value` type can round-trip deserialize-serialize NBT arrays. The
+  other crates have value types as well, they may also round-trip correctly.
+
+  Honestly, they all seem like good options!

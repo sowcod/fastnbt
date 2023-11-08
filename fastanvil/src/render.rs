@@ -1,6 +1,12 @@
-use std::cmp::Ordering;
+use std::{
+    cmp::Ordering,
+    io::{Read, Seek, Write},
+};
 
-use crate::{Block, CCoord, Chunk, Dimension, HeightMode, RCoord};
+use crate::{
+    Block, BlockArchetype, CCoord, Chunk, HeightMode, JavaChunk, LoaderError, LoaderResult, RCoord,
+    RegionLoader,
+};
 
 use super::biome::Biome;
 
@@ -25,7 +31,7 @@ impl<'a, P: Palette> TopShadeRenderer<'a, P> {
         }
     }
 
-    pub fn render<C: Chunk>(&self, chunk: &C, north: Option<&C>) -> [Rgba; 16 * 16] {
+    pub fn render<C: Chunk + ?Sized>(&self, chunk: &C, north: Option<&C>) -> [Rgba; 16 * 16] {
         let mut data = [[0, 0, 0, 0]; 16 * 16];
 
         let y_range = chunk.y_range();
@@ -55,7 +61,7 @@ impl<'a, P: Palette> TopShadeRenderer<'a, P> {
 
     /// Drill for colour. Starting at y_start, make way down the column until we
     /// have an opaque colour to return. This tackles things like transparency.
-    fn drill_for_colour<C: Chunk>(
+    fn drill_for_colour<C: Chunk + ?Sized>(
         &self,
         x: usize,
         y_start: isize,
@@ -71,18 +77,18 @@ impl<'a, P: Palette> TopShadeRenderer<'a, P> {
             let current_block = chunk.block(x, y, z);
 
             if let Some(current_block) = current_block {
-                match current_block {
-                    block if is_airy(block) => {
+                match current_block.archetype {
+                    BlockArchetype::Airy => {
                         y -= 1;
                     }
                     // TODO: Can potentially optimize this for ocean floor using
                     // heightmaps.
-                    block if is_watery(block) => {
+                    BlockArchetype::Watery => {
                         let mut block_colour = self.palette.pick(current_block, current_biome);
                         let water_depth = water_depth(x, y, z, chunk, y_min);
                         let alpha = water_depth_to_alpha(water_depth);
 
-                        block_colour[3] = alpha as u8;
+                        block_colour[3] = alpha;
 
                         colour = a_over_b_colour(colour, block_colour);
                         y -= water_depth;
@@ -100,24 +106,6 @@ impl<'a, P: Palette> TopShadeRenderer<'a, P> {
 
         colour
     }
-}
-
-/// Blocks that are considered as if they are water when determining colour.
-fn is_watery(block: &Block) -> bool {
-    matches!(
-        block.name(),
-        "minecraft:water"
-            | "minecraft:bubble_column"
-            | "minecraft:kelp"
-            | "minecraft:kelp_plant"
-            | "minecraft:sea_grass"
-            | "minecraft:tall_seagrass"
-    )
-}
-
-/// Blocks that are considered as if they are air when determining colour.
-fn is_airy(block: &Block) -> bool {
-    matches!(block.name(), "minecraft:air" | "minecraft:cave_air")
 }
 
 /// Convert `water_depth` meters of water to an approximate opacity
@@ -139,7 +127,13 @@ fn water_depth_to_alpha(water_depth: isize) -> u8 {
     (180 + 2 * water_depth).min(250) as u8
 }
 
-fn water_depth<C: Chunk>(x: usize, mut y: isize, z: usize, chunk: &C, y_min: isize) -> isize {
+fn water_depth<C: Chunk + ?Sized>(
+    x: usize,
+    mut y: isize,
+    z: usize,
+    chunk: &C,
+    y_min: isize,
+) -> isize {
     let mut depth = 1;
     while y > y_min {
         let block = match chunk.block(x, y, z) {
@@ -147,7 +141,7 @@ fn water_depth<C: Chunk>(x: usize, mut y: isize, z: usize, chunk: &C, y_min: isi
             None => return depth,
         };
 
-        if is_watery(block) {
+        if block.archetype == BlockArchetype::Watery {
             depth += 1;
         } else {
             return depth;
@@ -163,20 +157,16 @@ fn water_depth<C: Chunk>(x: usize, mut y: isize, z: usize, chunk: &C, y_min: isi
 /// See https://en.wikipedia.org/wiki/Alpha_compositing
 fn a_over_b_colour(colour: [u8; 4], below_colour: [u8; 4]) -> [u8; 4] {
     let linear = |c: u8| (((c as usize).pow(2)) as f32) / ((255 * 255) as f32);
+    let colour = colour.map(linear);
+    let below_colour = below_colour.map(linear);
 
-    let over_component = |ca: u8, aa: u8, cb: u8, ab: u8| {
-        let ca = linear(ca);
-        let cb = linear(cb);
-        let aa = linear(aa);
-        let ab = linear(ab);
+    let over_component = |ca: f32, aa: f32, cb: f32, ab: f32| {
         let a_out = aa + ab * (1. - aa);
         let linear_out = (ca * aa + cb * ab * (1. - aa)) / a_out;
         (linear_out * 255. * 255.).sqrt() as u8
     };
 
-    let over_alpha = |aa: u8, ab: u8| {
-        let aa = linear(aa);
-        let ab = linear(ab);
+    let over_alpha = |aa: f32, ab: f32| {
         let a_out = aa + ab * (1. - aa);
         (a_out * 255. * 255.).sqrt() as u8
     };
@@ -187,10 +177,6 @@ fn a_over_b_colour(colour: [u8; 4], below_colour: [u8; 4]) -> [u8; 4] {
         over_component(colour[2], colour[3], below_colour[2], below_colour[3]),
         over_alpha(colour[3], below_colour[3]),
     ]
-}
-
-pub trait IntoMap {
-    fn into_map(self) -> RegionMap<Rgba>;
 }
 
 pub struct RegionMap<T> {
@@ -223,57 +209,75 @@ impl<T: Clone> RegionMap<T> {
     }
 }
 
-pub fn render_region<P: Palette, C: Chunk + std::fmt::Debug>(
+pub fn render_region<P: Palette, S>(
     x: RCoord,
     z: RCoord,
-    dimension: Dimension<C>,
+    loader: &dyn RegionLoader<S>,
     renderer: TopShadeRenderer<P>,
-) -> RegionMap<Rgba> {
+) -> LoaderResult<Option<RegionMap<Rgba>>>
+where
+    S: Seek + Read + Write,
+{
     let mut map = RegionMap::new(x, z, [0u8; 4]);
 
-    let region = match dimension.region(x, z) {
+    let mut region = match loader.region(x, z)? {
         Some(r) => r,
-        None => return map,
+        None => return Ok(None),
     };
 
-    let mut cache: [Option<C>; 32] = Default::default();
+    let mut cache: [Option<JavaChunk>; 32] = Default::default();
 
     // Cache the last row of chunks from the above region to allow top-shading
     // on region boundaries.
-    if let Some(r) = dimension.region(x, RCoord(z.0 - 1)) {
+    if let Some(mut r) = loader.region(x, RCoord(z.0 - 1))? {
         for (x, entry) in cache.iter_mut().enumerate() {
-            *entry = r.chunk(CCoord(x as isize), CCoord(31));
+            *entry = r
+                .read_chunk(x, 31)
+                .ok()
+                .flatten()
+                .and_then(|b| JavaChunk::from_bytes(&b).ok())
         }
     }
 
-    for z in 0isize..32 {
-        for x in 0isize..32 {
-            let (x, z) = (CCoord(x), CCoord(z));
-            let data = map.chunk_mut(x, z);
+    for z in 0usize..32 {
+        for (x, cache) in cache.iter_mut().enumerate() {
+            let data = map.chunk_mut(CCoord(x as isize), CCoord(z as isize));
 
-            let chunk_data = region.chunk(x, z).map(|chunk| {
-                // Get the chunk at the same x coordinate from the cache. This
-                // should be the chunk that is directly above the current. We
-                // know this because once we have processed this chunk we put it
-                // in the cache in the same place. So the next time we get the
-                // current one will be when we're processing directly below us.
-                //
-                // Thanks to the default None value this works fine for the
-                // first row or for any missing chunks.
-                let north = cache[x.0 as usize].as_ref();
+            let chunk_data = region
+                .read_chunk(x, z)
+                .map_err(|e| LoaderError(e.to_string()))?;
+            let chunk_data = match chunk_data {
+                Some(data) => data,
+                None => {
+                    // If there's no chunk here, we still need to set the cache
+                    // otherwise the chunks below this will top-shade with an
+                    // incorrect chunk.
+                    *cache = None;
+                    continue;
+                }
+            };
 
-                let res = renderer.render(&chunk, north);
-                cache[x.0 as usize] = Some(chunk);
-                res
-            });
+            let chunk =
+                JavaChunk::from_bytes(&chunk_data).map_err(|e| LoaderError(e.to_string()))?;
 
-            if let Some(d) = chunk_data {
-                data[..].clone_from_slice(&d);
-            }
+            // Get the chunk at the same x coordinate from the cache. This
+            // should be the chunk that is directly above the current. We
+            // know this because once we have processed this chunk we put it
+            // in the cache in the same place. So the next time we get the
+            // current one will be when we're processing directly below us.
+            //
+            // Thanks to the default None value this works fine for the
+            // first row or for any missing chunks.
+            let north = cache.as_ref();
+
+            let res = renderer.render(&chunk, north);
+            *cache = Some(chunk);
+
+            data[..].clone_from_slice(&res);
         }
     }
 
-    map
+    Ok(Some(map))
 }
 
 /// Apply top-shading to the given colour based on the relative height of the

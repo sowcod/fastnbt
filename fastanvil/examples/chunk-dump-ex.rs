@@ -1,5 +1,5 @@
-use fastanvil::{JavaChunk, RegionBuffer};
-use fastnbt::de::from_bytes;
+use fastanvil::{CurrentJavaChunk, Region};
+use fastnbt::from_bytes;
 
 //
 // This loads a region file, extracts a chunk from it, and uses serde to
@@ -10,10 +10,10 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let file = std::fs::File::open(args[0].clone()).unwrap();
 
-    let region = RegionBuffer::new(file);
-    let data = region.load_chunk(0, 0).unwrap();
+    let mut region = Region::from_stream(file).unwrap();
+    let data = region.read_chunk(0, 0).unwrap().unwrap();
 
-    let chunk: JavaChunk = from_bytes(data.as_slice()).unwrap();
+    let chunk: CurrentJavaChunk = from_bytes(data.as_slice()).unwrap();
 
     println!("{:?}", chunk);
 }

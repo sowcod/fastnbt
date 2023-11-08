@@ -1,33 +1,34 @@
-//! fastnbt aims for fast deserializing of NBT data from *Minecraft: Java
-//! Edition*. This format is used by the game to store various things, such as
-//! the world data and player inventories.
+//! fastnbt aims for fast deserializing and serializing of NBT data from
+//! *Minecraft: Java Edition*. This format is used by the game to store various
+//! things, such as the world data and player inventories.
 //!
-//! * For documentation and examples of serde deserialization, see [`de`].
+//! * For documentation and examples of serde (de)serialization, see [`ser`] and
+//!   [`de`].
 //! * For a `serde_json`-like `Value` type see [`Value`].
+//! * To easily create values, see the [`nbt`] macro.
 //! * For NBT array types see [`ByteArray`], [`IntArray`], and [`LongArray`].
-//! * For 'zero-copy' NBT array types see [`borrow`].
+//! * For zero-copy NBT array types see [`borrow`].
 //!
 //! Both this and related crates are under one [fastnbt Github
-//! repository](https://github.com/owengage/fastnbt)
+//! repository](https://github.com/owengage/fastnbt).
 //!
 //! ```toml
 //! [dependencies]
-//! fastnbt = "1"
+//! fastnbt = "2"
 //! ```
 //!
 //! # Byte, Int and Long array types
 //!
-//! There are three array types in NBT. To capture these, use [`ByteArray`],
-//! [`IntArray`], and [`LongArray`]. These NBT types do not deserialize straight
-//! into serde sequences like `Vec` in order to preserve the information from
-//! the original NBT. Without these types, it is not possible to tell if some
-//! data came from a NBT List or an NBT Array.
+//! The NBT format has 4 sequence types: lists, byte arrays, int arrays and long
+//! arrays. To preserve the distinction between NBT lists and arrays, NBT array
+//! data cannot be (de)serialized into sequences like `Vec`. To capture arrays,
+//! use [`ByteArray`], [`IntArray`], and [`LongArray`]. An actual NBT list can
+//! be captured by a `Vec` or other suitable container.
 //!
 //! Use these in your own data structures. They all implement
-//! [`Deref`][`std::ops::Deref`] for dereferencing into the underlying `Vec`.
+//! [`Deref`][`std::ops::Deref`] for dereferencing into a slice.
 //!
-//! For versions that borrow their data, see [`borrow`]. For more information
-//! about deserialization see [`de`].
+//! For versions that borrow their data, see [`borrow`].
 //!
 //! An example of deserializing a section of a chunk:
 //!
@@ -43,13 +44,13 @@
 //! }
 //!
 //!# fn main(){
-//!     let buf: &[u8] = unimplemented!("get a buffer from somewhere");
-//!     let section: Section = fastnbt::de::from_bytes(buf).unwrap();
-//!     let states = section.block_states.unwrap();
+//! let buf: &[u8] = unimplemented!("get a buffer from somewhere");
+//! let section: Section = fastnbt::from_bytes(buf).unwrap();
+//! let states = section.block_states.unwrap();
 //!
-//!     for long in states.iter() {
-//!         // do something
-//!     }
+//! for long in states.iter() {
+//!     // do something
+//! }
 //! # }
 //! ```
 //!
@@ -69,7 +70,7 @@
 //!```no_run
 //! use std::borrow::Cow;
 //! use fastnbt::error::Result;
-//! use fastnbt::{de::from_bytes, Value};
+//! use fastnbt::{from_bytes, Value};
 //! use flate2::read::GzDecoder;
 //! use serde::Deserialize;
 //! use std::io::Read;
@@ -113,35 +114,47 @@
 //!# }
 //! ```
 //!
-//! # `Read` based parser
+//! # Stream based parser
 //!
-//! A lower level parser also exists in the `stream` module that only requires
-//! the `Read` trait on the input. This parser however doesn't support
-//! deserializing to Rust objects directly.
+//! A lower level parser also exists in the [`stream`] module for use cases not
+//! requiring deserialization into Rust objects. You can use [`from_reader`] for
+//! full deserialization.
 //!
 
-use serde::{Deserialize, Serialize};
+use ser::Serializer;
+use serde::{de as serde_de, Deserialize, Serialize};
 
 pub mod borrow;
 pub mod de;
 pub mod error;
+pub mod ser;
 pub mod stream;
+pub mod value;
 
 mod arrays;
-mod value;
+mod input;
+#[macro_use]
+mod macros;
 
 pub use arrays::*;
-pub use value::*;
-
-pub(crate) mod de_arrays;
+pub use value::{from_value, to_value, Value};
 
 #[cfg(test)]
 mod test;
 
-use std::convert::{TryFrom, TryInto};
+use crate::{
+    de::Deserializer,
+    error::{Error, Result},
+};
+use std::{
+    convert::TryFrom,
+    fmt::Display,
+    io::{Read, Write},
+};
 
 /// An NBT tag. This does not carry the value or the name of the data.
 #[derive(Deserialize, Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "arbitrary1", derive(arbitrary::Arbitrary))]
 #[repr(u8)]
 pub enum Tag {
     /// Represents the end of a Compound object.
@@ -172,17 +185,13 @@ pub enum Tag {
     LongArray = 12,
 }
 
-pub(crate) const BYTE_ARRAY_TAG: u8 = 7;
-pub(crate) const INT_ARRAY_TAG: u8 = 11;
-pub(crate) const LONG_ARRAY_TAG: u8 = 12;
-
 // Crates exist to generate this code for us, but would add to our compile
-// times, so we instead right it out manually, the tags will very rarely change
+// times, so we instead write it out manually, the tags will very rarely change
 // so isn't a massive burden, but saves a significant amount of compile time.
 impl TryFrom<u8> for Tag {
     type Error = ();
 
-    fn try_from(value: u8) -> Result<Self, ()> {
+    fn try_from(value: u8) -> std::result::Result<Self, ()> {
         use Tag::*;
         Ok(match value {
             0 => End,
@@ -223,31 +232,142 @@ impl From<Tag> for u8 {
     }
 }
 
-/// Compile time NBT tag type. Useful for forcing a custom type to have a field
-/// that must be a given tag. Used for the Array types.
-#[derive(Serialize, Clone, Copy, PartialEq)]
-pub(crate) struct CompTag<const N: u8>;
+impl Display for Tag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Tag::End => "end",
+            Tag::Byte => "byte",
+            Tag::Short => "short",
+            Tag::Int => "int",
+            Tag::Long => "long",
+            Tag::Float => "float",
+            Tag::Double => "double",
+            Tag::ByteArray => "byte-array",
+            Tag::String => "string",
+            Tag::List => "list",
+            Tag::Compound => "compound",
+            Tag::IntArray => "int-array",
+            Tag::LongArray => "long-array",
+        };
+        f.write_str(s)
+    }
+}
 
-impl<'de, const N: u8> Deserialize<'de> for CompTag<N> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let tag: u8 = Deserialize::deserialize(deserializer)?;
-        if tag != N {
-            Err(serde::de::Error::custom("unexpected array type"))
-        } else {
-            Ok(Self)
+/// Serialize some `T` into NBT data. See the [`ser`] module for more
+/// information.
+pub fn to_bytes<T: Serialize>(v: &T) -> Result<Vec<u8>> {
+    let mut result = vec![];
+    let mut serializer = Serializer {
+        writer: &mut result,
+    };
+    v.serialize(&mut serializer)?;
+    Ok(result)
+}
+
+/// Serialize some `T` into NBT data. See the [`ser`] module for more
+/// information.
+pub fn to_writer<T: Serialize, W: Write>(writer: W, v: &T) -> Result<()> {
+    let mut serializer = Serializer { writer };
+    v.serialize(&mut serializer)?;
+    Ok(())
+}
+
+/// Deserialize into a `T` from some NBT data. See the [`de`] module for more
+/// information.
+///
+/// ```no_run
+/// # use fastnbt::Value;
+/// # use flate2::read::GzDecoder;
+/// # use std::io;
+/// # use std::io::Read;
+/// # use fastnbt::error::Result;
+/// # fn main() -> Result<()> {
+/// # let some_reader = io::stdin();
+/// let mut decoder = GzDecoder::new(some_reader);
+/// let mut buf = vec![];
+/// decoder.read_to_end(&mut buf).unwrap();
+///
+/// let val: Value = fastnbt::from_bytes(buf.as_slice())?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn from_bytes<'a, T>(input: &'a [u8]) -> Result<T>
+where
+    T: serde_de::Deserialize<'a>,
+{
+    from_bytes_with_opts(input, Default::default())
+}
+
+/// Deserialize into a `T` from some NBT data. See the [`de`] module for more
+/// information.
+///
+/// ```no_run
+/// # use fastnbt::Value;
+/// # use flate2::read::GzDecoder;
+/// # use std::io;
+/// # use std::io::Read;
+/// # use fastnbt::error::Result;
+/// # fn main() -> Result<()> {
+/// # let some_reader = io::stdin();
+/// let mut decoder = GzDecoder::new(some_reader);
+/// let val: Value = fastnbt::from_reader(decoder)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn from_reader<'de, R, T>(reader: R) -> Result<T>
+where
+    T: serde_de::Deserialize<'de>,
+    R: Read,
+{
+    let mut deserializer = Deserializer::from_reader(reader, Default::default());
+    serde_de::Deserialize::deserialize(&mut deserializer)
+}
+
+/// Options for customizing deserialization.
+pub struct DeOpts {
+    /// Maximum number of bytes a list or array can be.
+    max_seq_len: usize,
+}
+
+impl DeOpts {
+    /// Create new options. This object follows a builder pattern.
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the maximum length any given sequence can be, eg lists. This does
+    /// not apply to NBT array types. This can help prevent panics on malformed
+    /// data.
+    pub fn max_seq_len(mut self, value: usize) -> Self {
+        self.max_seq_len = value;
+        self
+    }
+}
+
+impl Default for DeOpts {
+    fn default() -> Self {
+        Self {
+            max_seq_len: 10_000_000, // arbitrary high limit.
         }
     }
 }
 
-impl<const N: u8> std::fmt::Debug for CompTag<N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tag = <u8 as TryInto<Tag>>::try_into(N);
-        match tag {
-            Ok(tag) => tag.fmt(f),
-            Err(_) => write!(f, "InvalidTag({})", N),
-        }
+/// Similar to [`from_bytes`] but with options.
+pub fn from_bytes_with_opts<'a, T>(input: &'a [u8], opts: DeOpts) -> Result<T>
+where
+    T: serde_de::Deserialize<'a>,
+{
+    const GZIP_MAGIC_BYTES: [u8; 2] = [0x1f, 0x8b];
+
+    // Provide freindly error for the common case of passing GZip data to
+    // `from_bytes`. This would be invalid starting data for NBT anyway.
+    if input.starts_with(&GZIP_MAGIC_BYTES) {
+        return Err(Error::bespoke(
+            "from_bytes expects raw NBT, but input appears to be gzipped".to_string(),
+        ));
     }
+
+    let mut des = Deserializer::from_bytes(input, opts);
+    let t = T::deserialize(&mut des)?;
+    Ok(t)
 }

@@ -52,10 +52,16 @@ impl Chunk for JavaChunk {
             _ => {
                 // Assume latest
                 let range = self.y_range();
-                let y_shifted = (y.clamp(range.start, 0.max(range.end - 1)) - range.start) as usize;
+                if range.is_empty() {
+                    // Sometimes biomes can be specified, but there's actually
+                    // no blocks.
+                    return None;
+                }
+                let y_shifted = (y.clamp(range.start, range.end - 1) - range.start) as usize;
                 let i = (z / 4) * 4 + (x / 4) + (y_shifted / 4) * 16;
 
                 let biome = *biomes.get(i)?;
+
                 Biome::try_from(biome).ok()
             }
         }
@@ -110,7 +116,7 @@ pub struct Level {
     pub status: String,
 
     #[serde(skip)]
-    lazy_heightmap: RwLock<Option<[i16; 256]>>,
+    pub(crate) lazy_heightmap: RwLock<Option<[i16; 256]>>,
 }
 
 impl JavaChunk {
@@ -130,7 +136,7 @@ impl JavaChunk {
                     .map(|hm| {
                         // unwrap, if heightmaps exists, sections should... 🤞
                         let y_min = self.level.sections.as_ref().unwrap().y_min();
-                        expand_heightmap(hm.as_slice(), y_min, self.data_version)
+                        expand_heightmap(hm, y_min, self.data_version)
                     })
                     .map(|hm| map.copy_from_slice(hm.as_slice()))
                     .is_some();

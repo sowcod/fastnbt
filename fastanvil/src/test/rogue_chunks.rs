@@ -1,5 +1,3 @@
-use fastnbt::de::from_bytes;
-
 use crate::{Chunk, HeightMode, JavaChunk};
 
 const ETHO_OLD_HEIGHTS: &[u8] = include_bytes!("../../resources/etho-old-heightmaps.chunk");
@@ -8,8 +6,9 @@ const ETHO_OLD_IN_NEW: &[u8] = include_bytes!("../../resources/etho-old-in-new.c
 const ETHO_OLD_IN_NEW2: &[u8] = include_bytes!("../../resources/etho-old-in-new2.chunk");
 const ETHO: &[u8] = include_bytes!("../../resources/etho.chunk");
 const ETHO_EMPTY: &[u8] = include_bytes!("../../resources/etho-empty.chunk");
+const ETHO_EMPTY_SECTIONS: &[u8] = include_bytes!("../../resources/etho-end-r.-6.-1.c.7.25.nbt");
 
-fn extract_heights(chunk: &mut JavaChunk) -> [isize; 256] {
+fn extract_heights(chunk: &mut dyn Chunk) -> [isize; 256] {
     let mut heights = [0; 256];
     for z in 0..16 {
         for x in 0..16 {
@@ -23,7 +22,7 @@ fn extract_heights(chunk: &mut JavaChunk) -> [isize; 256] {
 fn etho_old_heightmap() {
     // Based on old heightmap data found in Etho's LP episode 550 world
     // download. r.1.0.mca, chunk with index x=7, z=8.
-    let mut chunk: JavaChunk = from_bytes(ETHO_OLD_HEIGHTS).unwrap();
+    let mut chunk = JavaChunk::from_bytes(ETHO_OLD_HEIGHTS).unwrap();
 
     let expected_heights = [
         64, 64, 65, 64, 65, 64, 64, 64, 64, 63, 63, 63, 63, 63, 63, 63, 66, 66, 64, 64, 64, 65, 65,
@@ -47,7 +46,7 @@ fn etho_old_heightmap() {
 fn etho_max_heights() {
     // Based on Etho's LP episode 550 world download. r.0.3.mca, chunk with
     // index x=24, z=6.
-    let mut chunk: JavaChunk = from_bytes(ETHO_MAX_HEIGHTS).unwrap();
+    let mut chunk = JavaChunk::from_bytes(ETHO_MAX_HEIGHTS).unwrap();
 
     let expected_heights = [
         251, 252, 253, 252, 252, 252, 252, 252, 252, 252, 252, 252, 251, 251, 251, 251, 251, 252,
@@ -73,7 +72,7 @@ fn etho_max_heights() {
 fn etho_old_in_new() {
     // Based Etho's LP episode 550 world download. r.-1.-1.mca, chunk with index
     // x=17, z=22.
-    let mut chunk: JavaChunk = from_bytes(ETHO_OLD_IN_NEW).unwrap();
+    let mut chunk = JavaChunk::from_bytes(ETHO_OLD_IN_NEW).unwrap();
     let expected_heights = [
         64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 65,
         64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
@@ -95,7 +94,7 @@ fn etho_old_in_new() {
 fn etho_old_in_new_with_rogue_bits() {
     // Based Etho's LP episode 550 world download. r.0.0.mca, chunk with index
     // x=16, z=21.
-    let mut chunk: JavaChunk = from_bytes(ETHO_OLD_IN_NEW2).unwrap();
+    let mut chunk = JavaChunk::from_bytes(ETHO_OLD_IN_NEW2).unwrap();
     let expected_heights = [
         64, 64, 65, 65, 65, 64, 64, 64, 63, 63, 67, 67, 68, 68, 69, 69, 64, 64, 64, 65, 65, 65, 65,
         64, 63, 63, 67, 67, 68, 68, 69, 69, 64, 64, 64, 65, 65, 65, 65, 66, 63, 63, 67, 67, 68, 68,
@@ -117,12 +116,7 @@ fn etho_old_in_new_with_rogue_bits() {
 fn etho() {
     // Based Etho's LP episode 550 world download. r.-1.-1.mca, chunk with index
     // x=27. z=0.
-    let mut chunk: JavaChunk = from_bytes(ETHO).unwrap();
-
-    match &chunk {
-        JavaChunk::Post18(c) => c.recalculate_heightmap(HeightMode::Calculate),
-        JavaChunk::Pre18(c) => c.recalculate_heightmap(HeightMode::Calculate),
-    }
+    let mut chunk = JavaChunk::from_bytes(ETHO).unwrap();
 
     let expected_heights = [
         63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63,
@@ -145,11 +139,7 @@ fn etho() {
 fn etho_empty() {
     // Based Etho's LP episode 550 world download. r.-1.-1.mca, chunk with index
     // x=27. z=0.
-    let mut chunk: JavaChunk = from_bytes(ETHO_EMPTY).unwrap();
-    match &chunk {
-        JavaChunk::Post18(c) => c.recalculate_heightmap(HeightMode::Calculate),
-        JavaChunk::Pre18(c) => c.recalculate_heightmap(HeightMode::Calculate),
-    }
+    let mut chunk = JavaChunk::from_bytes(ETHO_EMPTY).unwrap();
 
     let expected_heights = [
         75, 76, 76, 76, 75, 75, 67, 67, 66, 66, 66, 66, 66, 66, 66, 66, 75, 75, 75, 75, 75, 67, 67,
@@ -168,4 +158,13 @@ fn etho_empty() {
     let heights = extract_heights(&mut chunk);
 
     assert_eq!(expected_heights, heights);
+}
+
+#[test]
+fn etho_end_empty_sections() {
+    // This chunk has no sections, but does have biomes specified. This caused a
+    // panic in the biome selction code due to y_range being 0..0.
+    let chunk = JavaChunk::from_bytes(ETHO_EMPTY_SECTIONS).unwrap();
+    assert_eq!(0..0, chunk.y_range());
+    assert_eq!(None, chunk.biome(0, 0, 0));
 }
