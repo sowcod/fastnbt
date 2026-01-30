@@ -318,6 +318,7 @@ fn main() -> Result<()> {
                 .arg(
                     Arg::with_name("offset")
                         .long("offset")
+                        .allow_hyphen_values(true)
                         .takes_value(true)
                         .required(false)
                         .default_value("0,0"),
