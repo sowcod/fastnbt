@@ -201,7 +201,7 @@ fn render(args: &ArgMatches) -> Result<()> {
         }
     }
 
-    img.save("map.png").unwrap();
+    img.save(args.value_of("out").unwrap()).unwrap();
     Ok(())
 }
 
@@ -347,6 +347,13 @@ fn main() -> Result<()> {
                         .long("calculate-heights")
                         .takes_value(false)
                         .required(false),
+                )
+                .arg(
+                    Arg::with_name("out")
+                        .long("out")
+                        .takes_value(true)
+                        .required(false)
+                        .default_value("map.png"),
                 ),
         )
         .subcommand(
